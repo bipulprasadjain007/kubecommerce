@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kubecommerce-observability"
+version = "0.1.0"
+description = "Shared observability library for KubeCommerce FastAPI microservices."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "starlette",
+    "httpx",
+    "structlog",
+    "prometheus-client",
+    "pydantic>=2.7",
+    "pydantic-settings",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-httpx",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "httpx",
+    "ruff",
+    "mypy",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["kubecommerce_observability"]
+
+[tool.ruff]
+extend = "../../ruff.toml"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "."
+plugins = ["pydantic.mypy"]
+disallow_untyped_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
+addopts = "-q --strict-markers"
+markers = ["integration: requires external services (docker compose or testcontainers)"]
