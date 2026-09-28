@@ -1,0 +1,508 @@
+# =============================================================================
+# KubeCommerce - CI (Phase 7.1, 7.4)
+#
+# Pull-request and main-branch validation only. This workflow never publishes
+# artifacts and never needs write access to the repository: it builds the
+# evidence (lint, types, tests, integration, security) that branch protection
+# requires before merge.
+#
+# Design notes:
+#   * `permissions: contents: read` is the workflow default; jobs elevate only
+#     the scope they genuinely need (security-events, pull-requests).
+#   * Change detection (Phase 7.4) diffs the push/PR range, resolves the changed
+#     libs/services and exposes them as JSON outputs. A change to a shared
+#     library propagates to the services that depend on it. The first push to a
+#     branch has an all-zero `github.event.before`, so everything is treated as
+#     changed. If `git diff` cannot run (e.g. `before` is unreachable after a
+#     force-push) it fails safe to force-all instead of silently testing nothing.
+#     Shared/force-all paths: `ruff.toml`, `.python-version`, `.github/workflows/*`,
+#     `tests/*`, `tests/**`, `compose.yaml`, `.env*`, `scripts/**`, `Makefile`,
+#     `.dockerignore` - a PR touching the integration suite or compose runs every
+#     gate. Pull requests use a three-dot (merge-base) diff to avoid
+#     over-selecting files changed only on the base branch.
+#   * Branch protection requires the single stable aggregate check `ci-required`
+#     (plus `changes`, `dependency-security`, `code-security`,
+#     `container-config-security`, `compose-validation`). GitHub cannot require the
+#     dynamic matrix jobs directly; `ci-required` is the real gate.
+#   * Every third-party action is pinned to a full commit SHA. The `# vX.Y.Z`
+#     comment records the human-readable release (Dependabot updates both).
+# =============================================================================
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded PR runs; never cancel a main-branch run mid-flight.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # Keep CI on the same uv release the Dockerfiles pin.
+  UV_VERSION: "0.12.18"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Change detection - Phase 7.4
+  # ---------------------------------------------------------------------------
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      services: ${{ steps.detect.outputs.services }}
+      libs: ${{ steps.detect.outputs.libs }}
+      projects: ${{ steps.detect.outputs.projects }}
+      has_services: ${{ steps.detect.outputs.has_services }}
+      has_libs: ${{ steps.detect.outputs.has_libs }}
+      any: ${{ steps.detect.outputs.any }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed projects
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Full inventory of uv projects - the source of truth for the matrix.
+          all_services=()
+          for d in services/*/; do
+            [ -f "${d}pyproject.toml" ] && all_services+=("${d%/}")
+          done
+          all_libs=()
+          for d in libs/*/; do
+            [ -f "${d}pyproject.toml" ] && all_libs+=("${d%/}")
+          done
+
+          changed=""
+          force_all=0
+          case "${EVENT_NAME}" in
+            pull_request)
+              # Three-dot (merge-base) diff: only files this PR actually changed,
+              # not everything that landed on the base branch in the meantime.
+              if ! changed="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")"; then
+                # Unreachable base (force-push/rebased target): fail safe.
+                force_all=1
+              fi
+              ;;
+            *)
+              if [ -z "${BEFORE_SHA:-}" ] || printf '%s' "${BEFORE_SHA}" | grep -Eq '^0+$'; then
+                # First push to a branch: no parent commit to diff against.
+                force_all=1
+              elif ! changed="$(git diff --name-only "${BEFORE_SHA}" "${PUSH_SHA}")"; then
+                # `before` is unreachable (force-push): fail safe.
+                force_all=1
+              fi
+              ;;
+          esac
+
+          sel_services=()
+          sel_libs=()
+
+          add_unique() {
+            local -n _arr="$1"
+            local v="$2" e
+            for e in "${_arr[@]}"; do
+              [ "${e}" = "${v}" ] && return 0
+            done
+            _arr+=("${v}")
+          }
+
+          while IFS= read -r f; do
+            [ -n "${f}" ] || continue
+            case "${f}" in
+              services/*)
+                rest="${f#services/}"; svc="${rest%%/*}"
+                if [ -f "services/${svc}/pyproject.toml" ]; then
+                  add_unique sel_services "services/${svc}"
+                fi
+                ;;
+              libs/*)
+                rest="${f#libs/}"; lib="${rest%%/*}"
+                if [ -f "libs/${lib}/pyproject.toml" ]; then
+                  add_unique sel_libs "libs/${lib}"
+                fi
+                ;;
+              ruff.toml|.python-version|.github/workflows/*|\
+              tests/*|tests/**|compose.yaml|.env|.env.*|.env.example|\
+              scripts/*|scripts/**|Makefile|.dockerignore)
+                # Shared tooling, integration tests or infra changed: the result
+                # can affect every project, so validate all of them.
+                force_all=1
+                ;;
+            esac
+          done <<< "${changed}"
+
+          if [ "${force_all}" -eq 1 ]; then
+            sel_services=()
+            if [ "${#all_services[@]}" -gt 0 ]; then sel_services=("${all_services[@]}"); fi
+            sel_libs=()
+            if [ "${#all_libs[@]}" -gt 0 ]; then sel_libs=("${all_libs[@]}"); fi
+          else
+            # A shared-library change rebuilds/retests its dependants.
+            for lib in "${sel_libs[@]}"; do
+              case "${lib}" in
+                libs/observability)
+                  sel_services=()
+                  if [ "${#all_services[@]}" -gt 0 ]; then sel_services=("${all_services[@]}"); fi
+                  ;;
+                libs/contracts)
+                  add_unique sel_services services/order-service
+                  add_unique sel_services services/notification-worker
+                  ;;
+              esac
+            done
+          fi
+
+          # Build one matrix object per selected project ({name,path,pkg}).
+          proj_obj() {
+            local path="$1" name="${1##*/}" pkg=""
+            if [ -d "${path}/app" ]; then
+              pkg="app"
+            else
+              for c in "${path}"/kubecommerce_*/; do
+                if [ -d "${c}" ]; then pkg="$(basename "${c}")"; break; fi
+              done
+            fi
+            jq -nc --arg name "${name}" --arg path "${path}" --arg pkg "${pkg}" \
+              '{name:$name,path:$path,pkg:$pkg}'
+          }
+
+          proj_objs=()
+          for p in "${sel_services[@]}"; do proj_objs+=("$(proj_obj "${p}")"); done
+          for p in "${sel_libs[@]}"; do proj_objs+=("$(proj_obj "${p}")"); done
+
+          services_json='[]'
+          if [ "${#sel_services[@]}" -gt 0 ]; then
+            services_json="$(printf '%s\n' "${sel_services[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+          fi
+          libs_json='[]'
+          if [ "${#sel_libs[@]}" -gt 0 ]; then
+            libs_json="$(printf '%s\n' "${sel_libs[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+          fi
+          projects_json='[]'
+          if [ "${#proj_objs[@]}" -gt 0 ]; then
+            projects_json="$(printf '%s\n' "${proj_objs[@]}" | jq -sc '.')"
+          fi
+
+          has_services=false
+          if [ "${#sel_services[@]}" -gt 0 ]; then has_services=true; fi
+          has_libs=false
+          if [ "${#sel_libs[@]}" -gt 0 ]; then has_libs=true; fi
+          any=false
+          if [ "${#sel_services[@]}" -gt 0 ] || [ "${#sel_libs[@]}" -gt 0 ]; then any=true; fi
+
+          {
+            printf 'services=%s\n' "${services_json}"
+            printf 'libs=%s\n' "${libs_json}"
+            printf 'projects=%s\n' "${projects_json}"
+            printf 'has_services=%s\n' "${has_services}"
+            printf 'has_libs=%s\n' "${has_libs}"
+            printf 'any=%s\n' "${any}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "Changed services: ${services_json}"
+          echo "Changed libs:     ${libs_json}"
+          echo "Any change:       ${any}"
+
+  # ---------------------------------------------------------------------------
+  # Lint + format (ruff) - matrix over changed libs/services
+  # ---------------------------------------------------------------------------
+  lint:
+    name: lint
+    needs: changes
+    if: needs.changes.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: true
+      matrix:
+        project: ${{ fromJSON(needs.changes.outputs.projects) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Ruff check + format check (${{ matrix.project.name }})
+        working-directory: ${{ matrix.project.path }}
+        run: |
+          uv sync --locked
+          uv run ruff check .
+          uv run ruff format --check .
+
+  # ---------------------------------------------------------------------------
+  # Type checking (mypy) - matrix over changed libs/services
+  # ---------------------------------------------------------------------------
+  typecheck:
+    name: typecheck
+    needs: changes
+    if: needs.changes.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: true
+      matrix:
+        project: ${{ fromJSON(needs.changes.outputs.projects) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: mypy (${{ matrix.project.name }} -> ${{ matrix.project.pkg }})
+        working-directory: ${{ matrix.project.path }}
+        run: |
+          uv sync --locked
+          uv run mypy ${{ matrix.project.pkg }}
+
+  # ---------------------------------------------------------------------------
+  # Unit tests + per-project coverage gate (>= 80%)
+  # ---------------------------------------------------------------------------
+  unit-test:
+    name: unit-test
+    needs: changes
+    if: needs.changes.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        project: ${{ fromJSON(needs.changes.outputs.projects) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: pytest + coverage (${{ matrix.project.name }})
+        working-directory: ${{ matrix.project.path }}
+        run: |
+          uv sync --locked
+          uv run pytest -q \
+            --cov=${{ matrix.project.pkg }} \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=80
+
+      - name: Upload coverage artifact (${{ matrix.project.name }})
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ matrix.project.name }}
+          path: ${{ matrix.project.path }}/coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Cross-service integration + failure tests against docker compose
+  # ---------------------------------------------------------------------------
+  integration-test:
+    name: integration-test
+    needs: changes
+    if: needs.changes.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    # 60 min: cold-cache `docker compose up --build` of five images plus the
+    # integration and failure suites on a 2-vCPU runner can exceed 40 min.
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Create .env and .secrets JWT keypair
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          mkdir -p .secrets
+          chmod 700 .secrets
+          openssl genpkey -algorithm RSA \
+            -pkeyopt rsa_keygen_bits:2048 \
+            -out .secrets/jwt-private.pem
+          chmod 600 .secrets/jwt-private.pem
+          openssl rsa -in .secrets/jwt-private.pem -pubout \
+            -out .secrets/jwt-public.pem
+          chmod 644 .secrets/jwt-public.pem
+
+      - name: Start compose stack
+        run: docker compose up -d --build --wait --wait-timeout 300
+
+      - name: Integration suite
+        run: uv run --project tests/integration pytest -q -m "integration"
+
+      - name: Failure-mode suite
+        run: RUN_FAILURE_TESTS=1 uv run --project tests/integration pytest -q -m "failure"
+
+      - name: Collect compose logs
+        if: failure()
+        run: docker compose logs --no-color > compose-logs.txt 2>&1 || true
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compose-logs
+          path: compose-logs.txt
+          if-no-files-found: ignore
+
+      - name: Tear down compose stack
+        if: always()
+        run: docker compose down -v
+
+  # ---------------------------------------------------------------------------
+  # Dependency review - pull requests only
+  # ---------------------------------------------------------------------------
+  dependency-security:
+    name: dependency-security
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  # ---------------------------------------------------------------------------
+  # Code scanning - CodeQL for Python
+  # ---------------------------------------------------------------------------
+  code-security:
+    name: code-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+        with:
+          languages: python
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+        with:
+          category: "/language:python"
+
+  # ---------------------------------------------------------------------------
+  # Container/config supply-chain scan - Trivy
+  # A narrow, documented ignore file (.trivyignore) may be added at the repo
+  # root for a time-boxed exception; see docs/security.md.
+  # ---------------------------------------------------------------------------
+  container-config-security:
+    name: container-config-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Trivy filesystem scan (vuln, secret, misconfig)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Trivy config scan (compose.yaml + Dockerfiles)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          format: table
+
+  # ---------------------------------------------------------------------------
+  # Compose.yaml syntax + shell script syntax (replaces helm-validation for
+  # repo A: the Helm chart lives in the separate kubecommerce-gitops repo).
+  # ---------------------------------------------------------------------------
+  compose-validation:
+    name: compose-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate compose.yaml
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          docker compose -f compose.yaml config -q
+
+      - name: Syntax-check shell scripts
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            echo "bash -n ${f}"
+            bash -n "${f}"
+          done
+
+  # ---------------------------------------------------------------------------
+  # Stable aggregate required check.
+  #
+  # GitHub branch protection cannot require dynamic matrix jobs (lint, typecheck,
+  # unit-test) or conditionally-skipped jobs directly and reliably. Skipped jobs
+  # report `skipped` (treated as passing); this aggregate fails if any dependency
+  # finished `failure` or `cancelled`. Require ONLY `ci-required` (plus the always
+  # -running jobs) in branch protection, never the matrix legs.
+  #
+  # `if: always()` is mandatory so the aggregate still runs when a dependency
+  # fails; deliberately no `timeout-minutes` (it must not be cancelled before it
+  # can evaluate `always()`).
+  # ---------------------------------------------------------------------------
+  ci-required:
+    name: ci-required
+    if: always()
+    needs: [changes, lint, typecheck, unit-test, integration-test, dependency-security, code-security, container-config-security, compose-validation]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any dependency failed or was cancelled
+        run: echo '${{ toJSON(needs) }}' | jq -e 'to_entries | map(select(.value.result=="failure" or .value.result=="cancelled")) | length==0'
