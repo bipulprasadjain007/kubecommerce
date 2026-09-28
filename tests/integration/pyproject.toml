@@ -1,0 +1,39 @@
+# Independent uv project for KubeCommerce end-to-end integration and failure tests.
+# Run from this directory:
+#   export PATH="$HOME/.local/bin:$PATH"
+#   uv sync
+#   uv run pytest -q                     # integration tests only; skips without a stack
+#   RUN_FAILURE_TESTS=1 uv run pytest -q # additionally runs destructive failure tests
+#
+# This project is intentionally not installed (no importable package); it only
+# hosts pytest suites that talk to a running docker compose stack over HTTP.
+[project]
+name = "kubecommerce-integration-tests"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx",
+    "pytest",
+    "pytest-asyncio",
+    "aio-pika",
+]
+
+[dependency-groups]
+dev = ["ruff"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+extend = "../../ruff.toml"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
+addopts = "-q --strict-markers"
+markers = [
+    "integration: requires a running docker compose stack",
+    "failure: destructive failure tests; needs RUN_FAILURE_TESTS=1 and Docker",
+]

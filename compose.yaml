@@ -1,0 +1,303 @@
+# =============================================================================
+# KubeCommerce - local Docker Compose integration stack (Phase C).
+#
+# Usage:
+#   make compose-up         # build images + start everything, wait for health
+#   make smoke-test         # register -> login -> product -> order end to end
+#   make compose-down       # stop and remove volumes
+#   make integration-test   # compose up + cross-service pytest suites
+#
+# Starts all five services (gateway-api, auth-service, catalog-service,
+# order-service, notification-worker), PostgreSQL, Redis, RabbitMQ and a local
+# webhook sink. Per-service Alembic migrations run automatically as one-shot
+# `migrate-*` services before their owning application starts - application
+# startup never runs migrations.
+#
+# Values are taken from `.env` when present (Compose auto-loads it); every
+# variable below carries a dev-only default so a fresh checkout works after
+# `bash scripts/dev-bootstrap.sh` has created `.secrets/` and `.env`.
+#
+# Compose service names are the canonical slugs (== `service_name` == the
+# Kubernetes Service names); container hostnames used in the env defaults
+# (`auth-service`, `catalog-service`, `order-service`) therefore resolve with
+# no extra network aliases.
+# =============================================================================
+
+name: ${COMPOSE_PROJECT_NAME:-kubecommerce}
+
+x-shared-env: &shared-env
+  ENVIRONMENT: "${ENVIRONMENT:-dev}"
+  LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+  SERVICE_VERSION: "${SERVICE_VERSION:-0.1.0}"
+  OTEL_ENABLED: "${OTEL_ENABLED:-false}"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}"
+  OTEL_SAMPLE_RATIO: "${OTEL_SAMPLE_RATIO:-1.0}"
+
+x-auth-env: &auth-env
+  <<: *shared-env
+  AUTH_DATABASE_URL: "${AUTH_DATABASE_URL:-postgresql+asyncpg://kubecommerce:devpassword@postgres:5432/auth_db}"
+  AUTH_JWT_PRIVATE_KEY: "${AUTH_JWT_PRIVATE_KEY:-}"
+  AUTH_JWT_PRIVATE_KEY_FILE: "${AUTH_JWT_PRIVATE_KEY_FILE:-/secrets/jwt-private.pem}"
+  AUTH_JWT_PUBLIC_KEY: "${AUTH_JWT_PUBLIC_KEY:-}"
+  AUTH_JWT_PUBLIC_KEY_FILE: "${AUTH_JWT_PUBLIC_KEY_FILE:-/secrets/jwt-public.pem}"
+  AUTH_JWT_ISSUER: "${AUTH_JWT_ISSUER:-kubecommerce-auth}"
+  AUTH_JWT_AUDIENCE: "${AUTH_JWT_AUDIENCE:-kubecommerce}"
+  AUTH_ACCESS_TOKEN_TTL_SECONDS: "${AUTH_ACCESS_TOKEN_TTL_SECONDS:-900}"
+
+x-catalog-env: &catalog-env
+  <<: *shared-env
+  CATALOG_DATABASE_URL: "${CATALOG_DATABASE_URL:-postgresql+asyncpg://kubecommerce:devpassword@postgres:5432/catalog_db}"
+  CATALOG_REDIS_URL: "${CATALOG_REDIS_URL:-redis://redis:6379/0}"
+  CATALOG_CACHE_TTL_SECONDS: "${CATALOG_CACHE_TTL_SECONDS:-60}"
+  CATALOG_INTERNAL_API_TOKEN: "${CATALOG_INTERNAL_API_TOKEN:-dev-internal-token-change-me}"
+
+x-orders-env: &orders-env
+  <<: *shared-env
+  ORDERS_DATABASE_URL: "${ORDERS_DATABASE_URL:-postgresql+asyncpg://kubecommerce:devpassword@postgres:5432/orders_db}"
+  ORDERS_RABBITMQ_URL: "${ORDERS_RABBITMQ_URL:-amqp://kubecommerce:devpassword@rabbitmq:5672/}"
+  ORDERS_CATALOG_BASE_URL: "${ORDERS_CATALOG_BASE_URL:-http://catalog-service:8000}"
+  ORDERS_INTERNAL_API_TOKEN: "${ORDERS_INTERNAL_API_TOKEN:-dev-internal-token-change-me}"
+  ORDERS_REQUEST_TIMEOUT_SECONDS: "${ORDERS_REQUEST_TIMEOUT_SECONDS:-5}"
+  ORDERS_OUTBOX_POLL_INTERVAL_SECONDS: "${ORDERS_OUTBOX_POLL_INTERVAL_SECONDS:-2}"
+  ORDERS_OUTBOX_BATCH_SIZE: "${ORDERS_OUTBOX_BATCH_SIZE:-20}"
+
+x-worker-env: &worker-env
+  <<: *shared-env
+  WORKER_RABBITMQ_URL: "${WORKER_RABBITMQ_URL:-amqp://kubecommerce:devpassword@rabbitmq:5672/}"
+  WORKER_REDIS_URL: "${WORKER_REDIS_URL:-redis://redis:6379/1}"
+  WORKER_WEBHOOK_URL: "${WORKER_WEBHOOK_URL:-http://webhook-sink:9000/hook}"
+  WORKER_MAX_RETRIES: "${WORKER_MAX_RETRIES:-3}"
+  WORKER_PREFETCH: "${WORKER_PREFETCH:-10}"
+  WORKER_DEDUPE_TTL_SECONDS: "${WORKER_DEDUPE_TTL_SECONDS:-604800}"
+  WORKER_PROCESSING_TTL_SECONDS: "${WORKER_PROCESSING_TTL_SECONDS:-60}"
+  WORKER_WEBHOOK_TIMEOUT_SECONDS: "${WORKER_WEBHOOK_TIMEOUT_SECONDS:-5}"
+
+x-gateway-env: &gateway-env
+  <<: *shared-env
+  GATEWAY_REDIS_URL: "${GATEWAY_REDIS_URL:-redis://redis:6379/2}"
+  GATEWAY_AUTH_BASE_URL: "${GATEWAY_AUTH_BASE_URL:-http://auth-service:8000}"
+  GATEWAY_CATALOG_BASE_URL: "${GATEWAY_CATALOG_BASE_URL:-http://catalog-service:8000}"
+  GATEWAY_ORDER_BASE_URL: "${GATEWAY_ORDER_BASE_URL:-http://order-service:8000}"
+  GATEWAY_JWKS_URL: "${GATEWAY_JWKS_URL:-http://auth-service:8000/.well-known/jwks.json}"
+  GATEWAY_JWT_ISSUER: "${GATEWAY_JWT_ISSUER:-kubecommerce-auth}"
+  GATEWAY_JWT_AUDIENCE: "${GATEWAY_JWT_AUDIENCE:-kubecommerce}"
+  GATEWAY_RATE_LIMIT_PER_MINUTE: "${GATEWAY_RATE_LIMIT_PER_MINUTE:-120}"
+  GATEWAY_REQUEST_TIMEOUT_SECONDS: "${GATEWAY_REQUEST_TIMEOUT_SECONDS:-5}"
+  GATEWAY_JWKS_CACHE_TTL_SECONDS: "${GATEWAY_JWKS_CACHE_TTL_SECONDS:-300}"
+  GATEWAY_DEPENDENCY_CHECK_INTERVAL_SECONDS: "${GATEWAY_DEPENDENCY_CHECK_INTERVAL_SECONDS:-30}"
+  GATEWAY_INTERNAL_API_TOKEN: "${GATEWAY_INTERNAL_API_TOKEN:-dev-internal-token-change-me}"
+
+# Every application image serves readiness on container port 8000 via the
+# observability bootstrap. python is on PATH (`/app/.venv/bin`).
+x-app-healthcheck: &app-healthcheck
+  test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)\""]
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  start_period: 30s
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-kubecommerce}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-devpassword}"
+      POSTGRES_DB: "${POSTGRES_DB:-postgres}"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:-kubecommerce}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:-devpassword}"
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Alembic migrations (one-shot; app startup never migrates)
+  # ---------------------------------------------------------------------------
+  migrate-auth:
+    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-auth-service:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment: *auth-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  migrate-catalog:
+    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-catalog-service:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: services/catalog-service/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment: *catalog-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  migrate-orders:
+    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-order-service:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: services/order-service/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment: *orders-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Application services
+  # ---------------------------------------------------------------------------
+  auth-service:
+    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-auth-service:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    restart: unless-stopped
+    environment: *auth-env
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./.secrets:/secrets:ro
+    depends_on:
+      migrate-auth:
+        condition: service_completed_successfully
+    healthcheck: *app-healthcheck
+
+  catalog-service:
+    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-catalog-service:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: services/catalog-service/Dockerfile
+    restart: unless-stopped
+    environment: *catalog-env
+    ports:
+      - "8002:8000"
+    depends_on:
+      migrate-catalog:
+        condition: service_completed_successfully
+    healthcheck: *app-healthcheck
+
+  order-service:
+    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-order-service:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: services/order-service/Dockerfile
+    restart: unless-stopped
+    environment: *orders-env
+    ports:
+      - "8003:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate-orders:
+        condition: service_completed_successfully
+      catalog-service:
+        condition: service_started
+    healthcheck: *app-healthcheck
+
+  notification-worker:
+    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-notification-worker:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: services/notification-worker/Dockerfile
+    restart: unless-stopped
+    environment: *worker-env
+    ports:
+      - "8004:8000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck: *app-healthcheck
+
+  gateway-api:
+    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-gateway-api:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: services/gateway-api/Dockerfile
+    restart: unless-stopped
+    environment: *gateway-env
+    ports:
+      - "8080:8000"
+    depends_on:
+      auth-service:
+        condition: service_started
+      catalog-service:
+        condition: service_started
+      order-service:
+        condition: service_started
+    healthcheck: *app-healthcheck
+
+  # ---------------------------------------------------------------------------
+  # Local webhook sink (created by the integration-test lane)
+  # ---------------------------------------------------------------------------
+  webhook-sink:
+    image: python:3.12-slim
+    restart: unless-stopped
+    command: ["python", "/app/webhook_sink.py"]
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./tests/integration/support:/app:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/events', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq-data:
