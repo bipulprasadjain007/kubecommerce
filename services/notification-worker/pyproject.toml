@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kubecommerce-notification-worker"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "aio-pika",
+    "redis",
+    "httpx",
+    "pydantic",
+    "pydantic-settings",
+    "kubecommerce-observability",
+    "kubecommerce-contracts",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "httpx",
+    "fakeredis",
+    "respx",
+    "asgi-lifespan",
+    "ruff",
+    "mypy",
+]
+
+[tool.uv.sources]
+kubecommerce-observability = { path = "../../libs/observability" }
+kubecommerce-contracts = { path = "../../libs/contracts" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+extend = "../../ruff.toml"
+
+[tool.mypy]
+python_version = "3.12"
+# The contracts library ships without a py.typed marker; follow its (typed)
+# sources instead of downgrading every import to Any.
+follow_untyped_imports = true
+mypy_path = ". ../../libs/contracts"
+plugins = ["pydantic.mypy"]
+disallow_untyped_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
+addopts = "-q --strict-markers"
+markers = ["integration: requires external services (docker compose or testcontainers)"]
