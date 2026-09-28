@@ -381,8 +381,8 @@ These cannot be created from this machine; configure them in the GitHub UI / `gh
    matrix leg with nothing to do) report `skipped`, which counts as passing - so
    `ci-required` is the real gate, not the individual jobs.
 4. **Secret scanning** - enable secret scanning and push protection.
-5. **CODEOWNERS** - replace the `@your-github-username` placeholder in `CODEOWNERS` with a
-   real username/team, then enable "require code owner review".
+5. **CODEOWNERS** - `CODEOWNERS` already points at `@bipulprasadjain007`; enable
+   "require code owner review" (update the handle if you fork the project).
 6. **Dependabot** - `.github/dependabot.yml` is committed; enable Dependabot alerts and
    security updates (uv, GitHub Actions, Docker).
 7. **Actions permissions** - default `GITHUB_TOKEN` to read-only; grant write only per

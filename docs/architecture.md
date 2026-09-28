@@ -355,7 +355,7 @@ clusters/accounts in the cloud even if one cluster is used for the demonstration
 ## 11. Naming conventions
 
 - **Container images:** `ghcr.io/<user>/kubecommerce-<service>:<git-sha>`
-  (e.g. `ghcr.io/your-github-username/kubecommerce-order-service:a1b2c3d4e5f6`).
+  (e.g. `ghcr.io/bipulprasadjain007/kubecommerce-order-service:a1b2c3d4e5f6`).
   A mutable `latest-dev` tag may exist locally only; production deploys immutable
   SHA/digest tags. Never deploy `latest` to production.
 - **Namespaces:** `kubecommerce-dev`, `kubecommerce-staging`, `kubecommerce-prod`
@@ -479,7 +479,7 @@ is the documented template and `.env` is git-ignored.
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `kubecommerce` / `devpassword` / `postgres` |
 | `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` | `kubecommerce` / `devpassword` |
 | `COMPOSE_PROJECT_NAME` | `kubecommerce` |
-| `IMAGE_REGISTRY` | `ghcr.io/your-github-username` |
+| `IMAGE_REGISTRY` | `ghcr.io/bipulprasadjain007` |
 | `IMAGE_TAG` | `dev` |
 
 See `.env.example` for the complete annotated template.

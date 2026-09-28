@@ -30,7 +30,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
 USER nonroot
 EXPOSE 8000
 LABEL org.opencontainers.image.title="kubecommerce-order-service" \
-      org.opencontainers.image.source="https://github.com/your-github-username/kubecommerce" \
+      org.opencontainers.image.source="https://github.com/bipulprasadjain007/kubecommerce" \
       org.opencontainers.image.licenses="MIT"
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
      "--no-access-log", "--timeout-graceful-shutdown", "25"]

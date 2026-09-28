@@ -1,6 +1,6 @@
 # CODEOWNERS - https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 #
-# IMPORTANT: replace `@your-github-username` with your real GitHub username or
+# IMPORTANT: replace `@bipulprasadjain007` with your real GitHub username or
 # team handle (e.g. `@octocat` or `@my-org/platform-team`) before enabling
 # branch protection that requires code owner review. The placeholder will not
 # match any real user and therefore will not request reviews.
@@ -9,7 +9,7 @@
 # GitOps repository if it is later merged into this one. Split ownership per
 # service once a team grows, for example:
 #
-#   /services/order-service/  @your-github-username
-#   /services/auth-service/   @your-github-username
+#   /services/order-service/  @bipulprasadjain007
+#   /services/auth-service/   @bipulprasadjain007
 
-* @your-github-username
+* @bipulprasadjain007

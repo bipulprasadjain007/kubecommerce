@@ -27,7 +27,7 @@ export
 
 UV ?= uv
 GIT_SHA ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo dev)
-IMAGE_REGISTRY ?= ghcr.io/your-github-username
+IMAGE_REGISTRY ?= ghcr.io/bipulprasadjain007
 IMAGE_TAG ?= $(GIT_SHA)
 ENV ?= dev
 SERVICES := $(notdir $(wildcard services/*))

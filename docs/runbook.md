@@ -183,9 +183,10 @@ CLUSTER_NAME=<name> bash scripts/kind-down.sh   # delete a non-default cluster
 
 ### Known constraints (local platform)
 
-- Replace the `https://github.com/your-github-username/kubecommerce-gitops.git` placeholder in
-  `argocd/root-app.yaml`, `argocd/applicationset.yaml`, `argocd/project.yaml` and every
-  `platform/**` Application before the first Argo CD sync, or Argo rejects the sources.
+- Argo CD sources are already set to
+  `https://github.com/bipulprasadjain007/kubecommerce-gitops.git` in `argocd/root-app.yaml`,
+  `argocd/applicationset.yaml`, `argocd/project.yaml` and every `platform/**` Application.
+  If you fork the project, update all of them consistently or Argo rejects the sources.
 - The Alembic migration Jobs are `pre-install`/PreSync hooks that reference only out-of-band
   Secrets. Under Argo CD the namespaces/infrastructure waves run first, so Postgres is live when
   they execute. On a **bare `helm install`** without the platform stack, wait for Postgres first

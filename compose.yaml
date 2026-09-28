@@ -157,7 +157,7 @@ services:
   # Alembic migrations (one-shot; app startup never migrates)
   # ---------------------------------------------------------------------------
   migrate-auth:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-auth-service:${IMAGE_TAG:-dev}
+    image: ${IMAGE_REGISTRY:-ghcr.io/bipulprasadjain007}/kubecommerce-auth-service:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/auth-service/Dockerfile
@@ -169,7 +169,7 @@ services:
         condition: service_healthy
 
   migrate-catalog:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-catalog-service:${IMAGE_TAG:-dev}
+    image: ${IMAGE_REGISTRY:-ghcr.io/bipulprasadjain007}/kubecommerce-catalog-service:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/catalog-service/Dockerfile
@@ -181,7 +181,7 @@ services:
         condition: service_healthy
 
   migrate-orders:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-order-service:${IMAGE_TAG:-dev}
+    image: ${IMAGE_REGISTRY:-ghcr.io/bipulprasadjain007}/kubecommerce-order-service:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/order-service/Dockerfile
@@ -196,7 +196,7 @@ services:
   # Application services
   # ---------------------------------------------------------------------------
   auth-service:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-auth-service:${IMAGE_TAG:-dev}
+    image: ${IMAGE_REGISTRY:-ghcr.io/bipulprasadjain007}/kubecommerce-auth-service:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/auth-service/Dockerfile
@@ -212,7 +212,7 @@ services:
     healthcheck: *app-healthcheck
 
   catalog-service:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-catalog-service:${IMAGE_TAG:-dev}
+    image: ${IMAGE_REGISTRY:-ghcr.io/bipulprasadjain007}/kubecommerce-catalog-service:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/catalog-service/Dockerfile
@@ -226,7 +226,7 @@ services:
     healthcheck: *app-healthcheck
 
   order-service:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-order-service:${IMAGE_TAG:-dev}
+    image: ${IMAGE_REGISTRY:-ghcr.io/bipulprasadjain007}/kubecommerce-order-service:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/order-service/Dockerfile
@@ -246,7 +246,7 @@ services:
     healthcheck: *app-healthcheck
 
   notification-worker:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-notification-worker:${IMAGE_TAG:-dev}
+    image: ${IMAGE_REGISTRY:-ghcr.io/bipulprasadjain007}/kubecommerce-notification-worker:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/notification-worker/Dockerfile
@@ -262,7 +262,7 @@ services:
     healthcheck: *app-healthcheck
 
   gateway-api:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-github-username}/kubecommerce-gateway-api:${IMAGE_TAG:-dev}
+    image: ${IMAGE_REGISTRY:-ghcr.io/bipulprasadjain007}/kubecommerce-gateway-api:${IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: services/gateway-api/Dockerfile
