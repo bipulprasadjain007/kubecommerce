@@ -1,0 +1,53 @@
+# --- Deepwork local state ---
+.slim/deepwork/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+# uv/pytest/ruff/mypy caches
+.uv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit.xml
+
+# --- Environment and secrets ---
+.env
+.env.*
+!.env.example
+.secrets/
+
+# --- Docker / Compose ---
+docker-compose.override.yml
+*.tar
+
+# --- Kubernetes / local clusters ---
+.kube/
+kind-*.kubeconfig
+*.kubeconfig
+
+# --- Editors / OS ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- Logs / artifacts ---
+*.log
+artifacts/
+
+# GitOps repo B (separate git repository)
+/kubecommerce-gitops/

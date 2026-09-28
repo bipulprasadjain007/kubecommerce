@@ -1,0 +1,37 @@
+# Shared Ruff configuration for all KubeCommerce Python projects.
+# Individual projects extend this file:
+#   [tool.ruff]
+#   extend = "../../ruff.toml"
+
+line-length = 100
+target-version = "py312"
+indent-width = 4
+
+[lint]
+select = [
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "I",     # isort
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "ASYNC", # flake8-async
+    "S",     # flake8-bandit
+    "C4",    # flake8-comprehensions
+    "RUF",   # ruff-specific rules
+]
+ignore = [
+    "S105", # hardcoded-password-string: false positives on field/variable names
+]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["S101", "S105", "S106"]
+"**/alembic/versions/**" = ["E501"]
+
+[lint.isort]
+known-first-party = ["app", "kubecommerce_contracts", "kubecommerce_observability"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

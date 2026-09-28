@@ -1,0 +1,48 @@
+# Pre-commit hooks for KubeCommerce.
+# Install once after `make install`: `uv run pre-commit install`.
+# Run across the whole repo manually: `uv run pre-commit run --all-files`.
+#
+# Hook revisions are pinned to immutable tags on purpose. Update them
+# deliberately (Dependabot/Renovate or a manual bump), never floating.
+minimum_pre_commit_version: "3.5.0"
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # --- Generic hygiene hooks ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  # --- Python lint + format (same tool used by CI and `make lint`) ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # --- Per-project MyPy (local: uses each uv project's own environment) ---
+  # Only triggers when a Python file under libs/ or services/ changes, then
+  # type-checks every independent uv project via scripts/typecheck.sh.
+  - repo: local
+    hooks:
+      - id: typecheck-changed
+        name: typecheck (mypy per uv project)
+        entry: bash scripts/typecheck.sh
+        language: system
+        pass_filenames: false
+        files: ^(libs|services)/.*\.py$

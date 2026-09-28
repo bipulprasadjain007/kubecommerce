@@ -1,0 +1,45 @@
+# Applied to every service image build (build context is the repository root).
+# Keep: libs/**, services/<name>/app, services/<name>/alembic, pyproject.toml,
+#       uv.lock, alembic.ini.
+
+# VCS / CI / local agent state
+.git
+.gitignore
+.github
+.slim
+# GitOps repo B (separate repository; never shipped in application images)
+kubecommerce-gitops
+
+# Virtualenvs and Python caches
+.venv
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/*.egg-info
+**/.coverage
+**/.coverage.*
+**/htmlcov
+**/coverage.xml
+
+# Secrets and local environment files
+.env
+.env.*
+.secrets
+
+# Documentation and developer tooling not needed at runtime
+docs
+scripts
+Makefile
+compose*.yaml
+**/*.md
+CODEOWNERS
+.pre-commit-config.yaml
+.editorconfig
+.ruff_cache
+
+# Tests and load scripts are not shipped in images
+tests
+**/tests
