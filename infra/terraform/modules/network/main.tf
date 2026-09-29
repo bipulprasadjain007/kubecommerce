@@ -48,9 +48,9 @@ resource "aws_internet_gateway" "this" {
 resource "aws_subnet" "public" {
   count = var.az_count
 
-  vpc_id                  = aws_vpc.this.id
-  cidr_block              = local.public_subnet_cidrs[count.index]
-  availability_zone       = local.azs[count.index]
+  vpc_id            = aws_vpc.this.id
+  cidr_block        = local.public_subnet_cidrs[count.index]
+  availability_zone = local.azs[count.index]
   # Public subnets host NAT gateways and load balancers, which receive their own
   # addresses; instances launched here (if any) must not auto-assign public IPs
   # (Trivy AWS-0164).
