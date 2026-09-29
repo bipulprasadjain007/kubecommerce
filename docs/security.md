@@ -94,6 +94,12 @@ Pipeline controls, implemented in `.github/workflows/`:
 
 ### Documented exception path
 
+Current accepted infrastructure exceptions (each justified inline in `.trivyignore`):
+`AWS-0039` (EKS secrets encryption not enabled in the authored module), `AWS-0040`/`AWS-0041`
+(public, CIDR-restricted EKS API endpoint needed for GitOps access) and `AWS-0104` (EKS-managed
+cluster security group egress). These apply only to the author-only Terraform path and must be
+re-reviewed before any real deployment.
+
 A release gate may be waived only by a **narrow, documented exception**:
 
 1. Record the finding (CVE/rule id), the affected artifact, the reason it is not

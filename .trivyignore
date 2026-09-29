@@ -1,0 +1,21 @@
+# Trivy exceptions for the authored AWS/EKS Terraform path (see
+# docs/security.md "Documented exception path"). Each entry is narrow, has a
+# justification, and is reviewed with the infrastructure change.
+#
+# AWS-0039 - EKS secrets encryption (KMS) is not enabled in the module.
+#   Accepted for the portfolio path; the module is author-only (never applied).
+#   Before using real data, add a KMS key + encryption_config to modules/eks.
+AWS-0039
+#
+# AWS-0040 / AWS-0041 - EKS API endpoint is public (and CIDR-restricted via
+#   `public_access_cidrs`; prod's default placeholder is 203.0.113.0/24, dev is
+#   0.0.0.0/0 for demo access). Public access is required so Argo CD/kubectl can
+#   reach the cluster without a VPN/bastion. Tighten the CIDRs (or set
+#   endpoint_public_access=false) before any real deployment.
+AWS-0040
+AWS-0041
+#
+# AWS-0104 - the EKS-managed cluster security group allows unrestricted egress.
+#   Required for managed add-ons, image pulls and AWS APIs; restricting it
+#   reliably breaks EKS-managed traffic.
+AWS-0104

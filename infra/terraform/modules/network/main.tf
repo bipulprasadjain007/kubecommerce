@@ -51,7 +51,10 @@ resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.this.id
   cidr_block              = local.public_subnet_cidrs[count.index]
   availability_zone       = local.azs[count.index]
-  map_public_ip_on_launch = true
+  # Public subnets host NAT gateways and load balancers, which receive their own
+  # addresses; instances launched here (if any) must not auto-assign public IPs
+  # (Trivy AWS-0164).
+  map_public_ip_on_launch = false
 
   tags = merge(var.tags, {
     Name                     = "${var.name}-public-${local.azs[count.index]}"

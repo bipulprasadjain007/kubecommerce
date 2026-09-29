@@ -362,10 +362,12 @@ jobs:
         run: docker compose up -d --build --wait --wait-timeout 300
 
       - name: Integration suite
-        run: uv run --project tests/integration pytest -q -m "integration"
+        working-directory: tests/integration
+        run: uv run pytest -q -m "integration"
 
       - name: Failure-mode suite
-        run: RUN_FAILURE_TESTS=1 uv run --project tests/integration pytest -q -m "failure"
+        working-directory: tests/integration
+        run: RUN_FAILURE_TESTS=1 uv run pytest -q -m "failure"
 
       - name: Collect compose logs
         if: failure()
@@ -449,6 +451,7 @@ jobs:
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          trivyignores: .trivyignore
           exit-code: "1"
           format: table
 
@@ -458,6 +461,7 @@ jobs:
           scan-type: config
           scan-ref: .
           severity: CRITICAL,HIGH
+          trivyignores: .trivyignore
           exit-code: "1"
           format: table
 

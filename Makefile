@@ -113,8 +113,8 @@ integration-test: ## Compose up + cross-service tests (needs compose.yaml, Phase
 	fi; \
 	trap 'docker compose down -v' EXIT; \
 	docker compose up -d --build --wait --wait-timeout 300; \
-	$(UV) run --project tests/integration pytest -q -m "integration"; \
-	RUN_FAILURE_TESTS=1 $(UV) run --project tests/integration pytest -q -m "failure"
+	(cd tests/integration && $(UV) run pytest -q -m "integration"); \
+	(cd tests/integration && RUN_FAILURE_TESTS=1 $(UV) run pytest -q -m "failure")
 
 compose-up: ## Start the local Docker Compose stack and wait until healthy.
 	@if ! command -v docker >/dev/null 2>&1; then \
