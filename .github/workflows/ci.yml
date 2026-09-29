@@ -347,11 +347,13 @@ jobs:
           set -euo pipefail
           cp .env.example .env
           mkdir -p .secrets
-          chmod 700 .secrets
+          # Containers run as the image non-root uid (999); the bind-mounted
+          # directory must be traversable and the key readable by that uid.
+          chmod 755 .secrets
           openssl genpkey -algorithm RSA \
             -pkeyopt rsa_keygen_bits:2048 \
             -out .secrets/jwt-private.pem
-          chmod 600 .secrets/jwt-private.pem
+          chmod 644 .secrets/jwt-private.pem
           openssl rsa -in .secrets/jwt-private.pem -pubout \
             -out .secrets/jwt-public.pem
           chmod 644 .secrets/jwt-public.pem

@@ -42,7 +42,12 @@ if [ ! -d "$SECRETS_DIR" ]; then
   mkdir -p "$SECRETS_DIR"
   log "created $SECRETS_DIR"
 fi
-chmod 700 "$SECRETS_DIR" 2>/dev/null || true
+# The dev compose stack bind-mounts this directory into containers that run as
+# the image's non-root user (uid 999). The directory must be traversable and the
+# private key readable by that uid; a 0700/0600 pair produces
+# "PermissionError: /secrets/jwt-private.pem" inside auth-service. This is a
+# LOCAL-DEV-ONLY relaxation: Kubernetes mounts the key from a Secret instead.
+chmod 755 "$SECRETS_DIR" 2>/dev/null || true
 
 if command -v openssl >/dev/null 2>&1; then
   if [ -f "$PRIVATE_KEY" ] && [ -f "$PUBLIC_KEY" ]; then
@@ -53,7 +58,7 @@ if command -v openssl >/dev/null 2>&1; then
       openssl genpkey -algorithm RSA \
         -pkeyopt rsa_keygen_bits:2048 \
         -out "$PRIVATE_KEY" >/dev/null 2>&1
-      chmod 600 "$PRIVATE_KEY"
+      chmod 644 "$PRIVATE_KEY"
     fi
     if [ ! -f "$PUBLIC_KEY" ]; then
       log "deriving JWT public key -> $PUBLIC_KEY"
@@ -65,6 +70,11 @@ else
   warn "openssl not found; skipping JWT key generation."
   warn "Install openssl or provide keys via AUTH_JWT_PRIVATE_KEY(_FILE)."
 fi
+
+# Normalise permissions even for pre-existing keys (see the comment above).
+chmod 755 "$SECRETS_DIR" 2>/dev/null || true
+[ -f "$PRIVATE_KEY" ] && chmod 644 "$PRIVATE_KEY" 2>/dev/null || true
+[ -f "$PUBLIC_KEY" ] && chmod 644 "$PUBLIC_KEY" 2>/dev/null || true
 
 # --- 3. .env -----------------------------------------------------------------
 if [ -f .env ]; then

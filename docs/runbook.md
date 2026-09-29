@@ -202,6 +202,10 @@ CLUSTER_NAME=<name> bash scripts/kind-down.sh   # delete a non-default cluster
   `kindest/node:v1.36.4` digest; if `kind create` rejects it, override `KIND_NODE_IMAGE`.
 - `make kind-down` deletes all cluster data, PVCs included; Postgres re-runs its init script on
   the next cluster.
+- Local JWT keys: `scripts/dev-bootstrap.sh` intentionally leaves `.secrets/` at `0755` and the
+  PEM files at `0644` because the Compose containers read them as the image's non-root uid (999).
+  A `0700/0600` pair makes auth-service crash with `PermissionError: /secrets/jwt-private.pem`.
+  In Kubernetes the key is mounted from a Secret instead (no host-file relaxation).
 
 ## 3b. Policy as code (Kyverno - Phase 12.4)
 
