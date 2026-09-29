@@ -39,10 +39,12 @@ and the operational procedures around secrets, supply chain, and Kubernetes hard
   **External Secrets Operator**. Example paths:
 
 ```text
-/prod/kubecommerce/auth/jwt-signing-key
 /prod/kubecommerce/database/auth-url
+/prod/kubecommerce/database/catalog-url
 /prod/kubecommerce/database/orders-url
-/prod/kubecommerce/rabbitmq/password
+/prod/kubecommerce/auth/jwt-signing-key
+/prod/kubecommerce/internal/api-token
+# ... the full 10-path list lives in infra/README.md section 6
 ```
 
 - Workloads use **EKS Pod Identity** (short-lived, per-workload IAM roles), not static
@@ -131,20 +133,48 @@ Additional controls:
   each namespace.
 - Writable paths only where genuinely needed, via `emptyDir` (root filesystem read-only).
 
-## 6. Policy as code (Status: planned - Phase 12)
+## 6. Policy as code (Status: implemented - Phase 12.4)
 
-Kyverno (or Gatekeeper) policies, starting in **audit** mode, remediating, then enforcing
-selected rules:
+Kyverno runs in the local/GitOps cluster (Helm chart pinned in repo B,
+`platform/policies/`) and applies cluster-scoped `ClusterPolicy` resources that
+encode the Kubernetes hardening requirements. Policies start **audit-heavy**; the
+three policies the hardened chart already satisfies are **enforced** from day one.
 
-- disallow privileged containers;
-- require resource requests/limits;
-- require non-root execution;
-- disallow `latest` image tags;
-- require approved image registries;
-- require probes for production Deployments.
+- disallow privileged containers / privilege escalation (**Enforce**);
+- disallow `latest` and empty image tags (**Enforce**);
+- require non-root execution (**Enforce**);
+- require resource requests/limits (Audit);
+- require readiness **and** liveness probes (Audit, Deployments);
+- require approved image registries - `ghcr.io/bipulprasadjain007/*`, with an
+  explicit exception list for infra namespaces (Audit);
+- require `seccompProfile: RuntimeDefault` (Audit);
+- require `readOnlyRootFilesystem: true` (Audit, kubecommerce namespaces);
+- require `capabilities.drop: ["ALL"]` (Audit);
+- disallow hostPath volumes and host namespace access
+  (`hostNetwork`/`hostPID`/`hostIPC`) (Audit).
 
-Exit criterion: a deliberately insecure test manifest is rejected by CI and/or cluster
-policy.
+Container checks cover `containers`, `initContainers` and (where the API allows
+it) `ephemeralContainers`. Policies are scoped to the `kubecommerce-*`
+namespaces (plus `platform-system` where it makes sense); the label-selector
+alternative is **namespace-bounded**, so a pod carrying
+`app.kubernetes.io/part-of: kubecommerce` in another namespace (for example the
+OTel collector in `observability`, which needs the label as a NetworkPolicy
+peer) is not matched or denied. Kubernetes system namespaces are never matched.
+
+Fixtures in `platform/policies/tests/` pin both directions: a deliberately
+insecure manifest (`insecure-deployment.yaml`) and a hardened golden-path
+manifest (`compliant-workload.yaml`).
+
+The repo B `policy-validate` CI job downloads the SHA-256-verified pinned Kyverno
+CLI and asserts four things: the namespace-stamped Helm-rendered dev chart
+produces no violations, the insecure fixture produces exactly the expected
+violation count with every policy name present (so deleting a policy cannot
+pass), the compliant fixture passes, and the hardened OTel collector stays
+outside the policy scope. This is the machine-checkable half of the exit
+criterion ("a deliberately insecure test manifest is rejected by CI and/or
+cluster policy"). Promoting an Audit policy to Enforce is a one-line
+`validationFailureAction` change after remediation; see
+`platform/policies/README.md` in the GitOps repository.
 
 ## 7. Logging hygiene (Status: implemented by design; enforced during Phase 1)
 
@@ -186,5 +216,5 @@ policy.
 | Dependabot for uv / Actions / Docker | implemented (`.github/dependabot.yml`, grouped weekly) |
 | non-root, read-only rootfs, drop ALL, seccomp, PSA | planned (Phase 4/12) |
 | NetworkPolicy default-deny | planned (Phase 4/12) |
-| Kyverno/Gatekeeper policy as code | planned (Phase 12) |
+| Kyverno policy as code: Enforce (privileged/escalation, mutable tags, non-root) + Audit (resources, probes, registries, seccomp, read-only rootfs, drop ALL, hostPath/hostNetwork/hostPID/hostIPC); namespace-bounded, covers init/ephemeral containers | implemented (Phase 12.4, GitOps repo B `platform/policies/`); `policy-validate` CI gate (chart + insecure + compliant + OTel) |
 | Branch protection, required reviews, CODEOWNERS, secret scanning (GitHub settings) | manual GitHub setup (documented in README/runbook) |

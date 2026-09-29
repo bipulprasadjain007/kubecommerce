@@ -279,6 +279,41 @@ Mirrors guide section 13.
 11. Open a distributed trace and correlated logs.
 12. Revert a GitOps release and show rollback.
 
+## Reliability demos
+
+`scripts/reliability-demo.sh` drives the guide Phase 11 demos and collects
+evidence (logs, summaries, replica trajectories) under
+`artifacts/reliability/<UTC timestamp>/`. Each mode restores the state it
+changed (background load stopped, drained nodes uncordoned) via an EXIT trap;
+namespaces and PVCs are never deleted. **Runtime execution requires the local
+kind cluster** (`make kind-up`) with the app deployed - it cannot run without a
+cluster.
+
+```bash
+scripts/reliability-demo.sh --help          # modes + environment variables
+scripts/reliability-demo.sh rolling          # 11.1 zero-downtime rolling restart
+scripts/reliability-demo.sh hpa              # 11.4 k6 load -> HPA scale-up
+scripts/reliability-demo.sh crash            # 11.5 pod delete + `kill 1` (liveness)
+scripts/reliability-demo.sh disruption       # 11.6 cordon + drain a worker, then uncordon
+scripts/reliability-demo.sh rollback         # 11.1 restart then `rollout undo`
+scripts/reliability-demo.sh all              # every mode + 00-summary.md
+```
+
+| Mode | Guide | What to observe | Evidence |
+|---|---|---|---|
+| `rolling` | 11.1 | `gateway-api` restarts with the `curl` loop showing **0 server errors** (4xx reported separately) | `rolling/rollout-status.txt`, `rolling/availability-summary.txt` |
+| `hpa` | 11.4 | k6 load pushes `status.currentReplicas` above its starting value | `hpa/replica-trajectory.txt`, `hpa/hpa-watch.log`, `hpa/load.log` |
+| `crash` | 11.5 | the deleted pod's UID is gone and a **different, Ready pod** replaces it; `kill 1` increments the **same** pod's `restartCount` | `crash/deleted-pod.txt`, `crash/self-healing.txt`, `crash/kill1-exec.txt` |
+| `disruption` | 11.6 | PDB state recorded, drain completes, availability loop stays clean, node uncordoned | `disruption/drain.txt`, `disruption/pdb-during.txt`, `disruption/availability-summary.txt`, `disruption/uncordon.txt` |
+| `rollback` | 11.1 | new revision becomes Ready, then `rollout undo` returns the previous one, clean availability | `rollback/rollout-undo.txt`, `rollback/rollout-history-after.txt`, `rollback/availability-summary.txt` |
+
+Key environment variables: `NAMESPACE` (default `kubecommerce-dev`), `RELEASE`
+(`kubecommerce`), `BASE_URL` (`http://localhost/`), `TARGET_DEPLOY`
+(`gateway-api`), `K6_VUS`/`K6_DURATION`, `ARTIFACTS_DIR`. Running against any
+`kubecommerce-prod*` namespace is refused unless `FORCE=1` is set. `hpa` needs a
+namespace with the HPA enabled (dev has HPA off - use staging/prod values); `k6`
+must be installed. See `docs/runbook.md` for the full runbook.
+
 ## Trade-offs and decisions
 
 - **One PostgreSQL instance, three databases.** `auth_db`, `catalog_db`, and `orders_db`
@@ -353,6 +388,17 @@ reviewed PR with environment approval - it is never automated. See
 input `registry: ecr`) that federates to AWS via OIDC
 (`aws-actions/configure-aws-credentials`) and logs in to ECR - no long-lived AWS access
 keys. Full ECR push and EKS deployment come in Phase 13.
+
+## Cloud (AWS EKS) - optional and author-only
+
+The EKS path is fully authored under [`infra/`](infra/README.md): Terraform modules for VPC,
+EKS, ECR, optional RDS, Secrets Manager, GitHub OIDC, Pod Identity and a cost budget. The
+cluster-side wiring lives in the GitOps repo (`platform/cloud-apps` for External Secrets
+Operator and cert-manager, `platform/external-secrets` for the secret mapping, and
+`platform/cert-manager` for ACME issuers and the HTTPS listener). Nothing has been applied,
+and this repository's CI never touches AWS unless you explicitly dispatch the `terraform`
+workflow or the `registry: ecr` release job. `infra/README.md` carries the cost table, apply
+order and teardown steps.
 
 ## GitHub repository setup (manual steps)
 

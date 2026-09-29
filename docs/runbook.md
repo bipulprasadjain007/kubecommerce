@@ -169,6 +169,10 @@ kubectl -n kubecommerce-dev get gateway,httproute   # after the GitOps lane appl
 curl -sI http://localhost/                           # host 80 -> Envoy Gateway NodePort 30080
 ```
 
+> Reliability and self-healing demos (rolling update, HPA, crash recovery,
+> node disruption, rollback) are driven by `scripts/reliability-demo.sh` and
+> documented in **section 10** below.
+
 Delete the cluster when done (no-op with a message if it does not exist):
 
 ```bash
@@ -198,6 +202,19 @@ CLUSTER_NAME=<name> bash scripts/kind-down.sh   # delete a non-default cluster
   `kindest/node:v1.36.4` digest; if `kind create` rejects it, override `KIND_NODE_IMAGE`.
 - `make kind-down` deletes all cluster data, PVCs included; Postgres re-runs its init script on
   the next cluster.
+
+## 3b. Policy as code (Kyverno - Phase 12.4)
+
+Kyverno and its ClusterPolicies are installed by Argo CD from the GitOps repo B
+(`platform/policies/apps/kyverno.yaml` wave -2, `kyverno-policies.yaml` wave -1,
+namespaces at wave -5). Three policies are enforced (privileged containers,
+mutable/`latest` tags, non-root); the rest start in audit. The `policy-validate`
+CI job runs the pinned Kyverno CLI against the rendered chart and against a
+deliberately insecure fixture.
+
+Full details - enforced-vs-audited table, local commands, promoting Audit to
+Enforce, and the kind/kindnet caveat - are in
+[`kubecommerce-gitops/platform/policies/README.md`](../kubecommerce-gitops/platform/policies/README.md).
 
 ## 4. Deploy and roll back (Phase 5/8 - planned)
 
@@ -245,6 +262,34 @@ helm rollback kubecommerce <revision> -n kubecommerce-prod
 ```
 
 Rollback restores a previously published immutable digest; it never rebuilds.
+
+### AWS EKS (Phase 13 - authored, not applied)
+
+The cloud path lives in [`infra/terraform`](../infra/README.md) (repo A) with the cluster-side
+wiring in the GitOps repo (`platform/cloud-apps`, `platform/external-secrets`,
+`platform/cert-manager`). Nothing is applied automatically; `terraform apply` is a cost
+decision (see the cost table in `infra/README.md`).
+
+1. Apply an environment:
+   `cd infra/terraform/environments/dev && terraform init && terraform plan && terraform apply`.
+2. Wire the outputs into the GitOps repo: set the chart image registry to `ecr_registry`,
+   replace `<aws-region>` in the `ClusterSecretStore`, and align the secret paths with
+   `secrets_path_prefix`.
+3. Register the cluster with Argo CD (`aws eks update-kubeconfig --name <cluster>`, then
+   `argocd cluster add`), and flip the cloud Applications (`platform/cloud-apps`) from manual
+   sync to automated once the CRDs are Established.
+4. Secrets flow: AWS Secrets Manager (`/<env>/kubecommerce/...`) -> External Secrets Operator
+   -> `<service>-secrets` in `kubecommerce-<env>`. Rotation is picked up on the
+   `refreshInterval`; restart deployments to reload (`kubectl rollout restart deploy`).
+5. TLS/DNS: point the domain at the Gateway LoadBalancer, uncomment the HTTPS listener
+   hostname + `cert-manager.io/cluster-issuer` annotation and the HTTPRoute hostnames, then
+   verify `Certificate`/`Gateway` readiness (see `platform/cert-manager/README.md`).
+6. Teardown when not demoing: `terraform destroy` plus any lingering load balancers, NAT
+   gateways and RDS snapshots; the `budget` module alerts on spend.
+
+AWS image promotion uses the same GitOps flow as local: CI publishes to ECR through the OIDC
+role (`release.yml` dispatch input `registry: ecr`) and updates GitOps values; production stays
+a reviewed PR.
 
 ## 4b. CI/CD pipeline (Phase 7)
 
@@ -538,3 +583,72 @@ the old public key.
   Validate in dev, then staging, then prod (GitOps PR).
 - **Maintenance rule.** Do not copy version numbers from the plan blindly months later;
   validate compatibility between Kubernetes, Helm, CRDs, and controllers.
+
+## 10. Reliability demo runbook
+
+`scripts/reliability-demo.sh` collects evidence for the guide Phase 11 demos and
+the section 13 demo-script step 9 ("kill a pod and show self-healing"). It needs
+`kubectl` and a reachable kind cluster (`make kind-up`) with the app deployed;
+`k6` is additionally required for the `hpa` mode. It never deletes namespaces or
+PVCs, stops its own background load, and uncordons any node it drained (EXIT trap).
+
+Prerequisites and setup:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+make kind-up                                  # cluster + platform
+make helm-install                             # or let Argo CD sync kubecommerce-dev
+kubectl -n kubecommerce-dev get deploy,hpa,pdb
+scripts/reliability-demo.sh --help
+```
+
+Run one demo at a time, or all of them (each writes into its own subdirectory of
+`artifacts/reliability/<UTC timestamp>/`):
+
+```bash
+scripts/reliability-demo.sh rolling
+scripts/reliability-demo.sh hpa
+scripts/reliability-demo.sh crash
+scripts/reliability-demo.sh disruption
+scripts/reliability-demo.sh rollback
+scripts/reliability-demo.sh all               # writes 00-summary.md
+```
+
+Expected observations:
+
+| Mode | Command | Expected observation |
+|---|---|---|
+| Rolling update | `rolling` | `kubectl rollout status` completes; `availability-summary.txt` shows `server_errors_5xx_or_connection=0` and `result=PASS`. Fails only on 5xx/connection errors; 4xx are reported separately as `client_4xx`. |
+| HPA | `hpa` | k6 runs (`load.log`), `replica-trajectory.txt` shows `current` rising above the initial count; fails if no scale-up occurred. Needs an HPA-enabled namespace. |
+| Crash recovery | `crash` | the deleted pod's name+UID (`deleted-pod.txt`) is gone and a **different, Ready pod** (new name+UID) replaces it (`self-healing.txt`); `kill 1` increments the **same** pod's `restartCount` (`kill1-exec.txt`). |
+| Disruption | `disruption` | node is cordoned then drained (`drain.txt`), PDB state captured (`pdb-during.txt`), availability loop stays clean, node is uncordoned (`uncordon.txt`). |
+| Rollback | `rollback` | a new revision becomes Ready, `rollout undo` returns the previous one, availability stays clean. |
+
+Configuration (environment variables): `NAMESPACE` (default `kubecommerce-dev`),
+`RELEASE` (`kubecommerce`), `BASE_URL` (`http://localhost/`), `TARGET_DEPLOY`
+(`gateway-api`), `HPA_NAME` (default: first HPA in the namespace),
+`K6_VUS`/`K6_DURATION`, `ARTIFACTS_DIR`, `HPA_WATCH_SECONDS`, `ROLLOUT_TIMEOUT`,
+`POD_READY_TIMEOUT`, `DRAIN_TIMEOUT`, `NODE_NAME`, and `FORCE`.
+
+Cleanup:
+
+- The script restores cluster state itself; verify with
+  `kubectl get nodes` (no `SchedulingDisabled`) and
+  `kubectl -n kubecommerce-dev get pods`.
+- Background load is stopped in the EXIT trap; if a run was interrupted, check
+  `pgrep -af order-flow.js` and `kill` any leftover k6.
+- Evidence is kept under `artifacts/reliability/`; the directory is git-ignored
+  and safe to delete with `make clean`.
+
+Safety notes:
+
+- Any `kubecommerce-prod*` namespace is refused unless `FORCE=1` is set.
+- `disruption` evicts every pod on one worker node. A PDB that forbids eviction
+  makes `kubectl drain` itself fail, so the script reports the **drain step** as
+  failed (`drain_ok=0`); a single-replica dev deployment can instead cause real
+  request failures while pods reschedule, which fails the **availability
+  assertion** (`availability_ok=0`). Prefer staging/prod values (3 replicas, PDB
+  `minAvailable: 2`, topology spread) for a clean disruption demo.
+- Never run `disruption` on a cluster whose only worker also hosts state you
+  cannot lose; Postgres keeps its PVC, but pods are evicted and rescheduled.
+
