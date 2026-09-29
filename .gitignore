@@ -49,5 +49,13 @@ Thumbs.db
 *.log
 artifacts/
 
+# --- Terraform ---
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+
 # GitOps repo B (separate git repository)
 /kubecommerce-gitops/

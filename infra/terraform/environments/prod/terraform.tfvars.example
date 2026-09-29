@@ -1,0 +1,54 @@
+# Copy to terraform.tfvars and edit. NEVER put real secret values in this file
+# (it would be committed). Secrets live in AWS Secrets Manager, created
+# out-of-band (see infra/README.md).
+
+aws_region  = "us-east-1"
+environment = "prod"
+
+# Network
+vpc_cidr           = "10.1.0.0/16"
+az_count           = 3
+single_nat_gateway = true   # one NAT gateway keeps cost down (documented trade-off)
+enable_flow_logs   = false  # CloudWatch Logs ingest is an extra cost
+
+# EKS
+eks_cluster_version = "1.34"
+node_instance_types = ["t3.medium"]
+node_desired_size   = 2
+node_min_size       = 2
+node_max_size       = 4
+
+# Public EKS API endpoint - REPLACE 203.0.113.0/24 with your operator CIDR.
+# (203.0.113.0/24 is TEST-NET-3, a documentation placeholder, so an accidental
+# apply does not expose the API to the internet.)
+public_access_cidrs = ["203.0.113.0/24"]
+
+# RDS - on in prod, Multi-AZ, deletion protection, final snapshot retained.
+enable_rds             = true
+rds_instance_class     = "db.t4g.micro"
+rds_multi_az           = true
+rds_deletion_protection = true
+rds_skip_final_snapshot = false
+
+# GitHub OIDC trust: plan runs on main; apply runs under the `aws` environment.
+github_oidc_subjects = [
+  "repo:bipulprasadjain007/kubecommerce:ref:refs/heads/main",
+  "repo:bipulprasadjain007/kubecommerce:ref:refs/tags/v*",
+  "repo:bipulprasadjain007/kubecommerce:environment:aws",
+]
+
+# The GitHub OIDC provider is account-global. Apply one environment first, or
+# reuse the existing provider by setting create_oidc_provider = false and
+# existing_oidc_provider_arn = "arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com".
+# In prod, a non-empty existing_oidc_provider_arn forces reuse even if
+# create_oidc_provider is left true.
+create_oidc_provider       = true
+existing_oidc_provider_arn = ""
+
+# Optional: attach a scoped deployment policy to the CI role so terraform
+# plan/apply can run from GitHub Actions. Leave empty for ECR-push-only.
+terraform_role_policy_arns = []
+
+# Budget - at least one subscriber is required.
+monthly_budget_usd  = 200
+budget_alert_emails = ["you@example.com"]
